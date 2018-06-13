@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 #
 # Copyright 2009 Facebook
 #
@@ -26,14 +27,45 @@ try:
 except ImportError:
     setuptools = None
     from distutils.core import setup
+try:
+    from Cython.Distutils import build_ext
+
+    CYTHON = True
+except ImportError:
+    CYTHON = False
 
 from distutils.core import Extension
+from setuptools.extension import Extension as CythonExtension
+from setuptools import setup, glob
 
-# The following code is copied from
-# https://github.com/mongodb/mongo-python-driver/blob/master/setup.py
-# to support installing without the extension on platforms where
-# no compiler is available.
-from distutils.command.build_ext import build_ext
+# Cythonized
+CYTHONIZE = bool(os.environ.get("TORNADO_CYTHONIZE", 1))
+
+# Modules to compile in Cython
+MYDIR = os.path.abspath(os.path.dirname(__file__))
+
+
+def list_modules(dirname):
+    filenames = glob.glob(os.path.join(dirname, "*.py"))
+
+    module_names = []
+    for name in filenames:
+        module, ext = os.path.splitext(os.path.basename(name))
+        if module != "__init__":
+            module_names.append(module)
+
+    return module_names
+
+
+package_names = ["tornado", "tornado.platform"]
+ext_modules = [
+    CythonExtension(
+        package + "." + module, [os.path.join(*(package.split(".") + [module + ".py"]))]
+    )
+    for package in package_names
+    for module in list_modules(os.path.join(MYDIR, *package.split(".")))
+]
+print(f"ext_modules: {ext_modules}")
 
 
 class custom_build_ext(build_ext):
@@ -68,10 +100,10 @@ Fedora users should issue the following command:
 
     $ sudo dnf install gcc python-devel
 
-MacOS users should run:
+If you are seeing this message on OSX please read the documentation
+here:
 
-    $ xcode-select --install
-
+http://api.mongodb.org/python/current/installation.html#osx
 ********************************************************************
 """
 
@@ -80,11 +112,16 @@ MacOS users should run:
             build_ext.run(self)
         except Exception:
             e = sys.exc_info()[1]
-            sys.stdout.write('%s\n' % str(e))
-            warnings.warn(self.warning_message % ("Extension modules",
-                                                  "There was an issue with "
-                                                  "your platform configuration"
-                                                  " - see above."))
+            sys.stdout.write("%s\n" % str(e))
+            warnings.warn(
+                self.warning_message
+                % (
+                    "Extension modules",
+                    "There was an issue with "
+                    "your platform configuration"
+                    " - see above.",
+                )
+            )
 
     def build_extension(self, ext):
         name = ext.name
@@ -92,60 +129,65 @@ MacOS users should run:
             build_ext.build_extension(self, ext)
         except Exception:
             e = sys.exc_info()[1]
-            sys.stdout.write('%s\n' % str(e))
-            warnings.warn(self.warning_message % ("The %s extension "
-                                                  "module" % (name,),
-                                                  "The output above "
-                                                  "this warning shows how "
-                                                  "the compilation "
-                                                  "failed."))
+            sys.stdout.write("%s\n" % str(e))
+            warnings.warn(
+                self.warning_message
+                % (
+                    "The %s extension " "module" % (name,),
+                    "The output above "
+                    "this warning shows how "
+                    "the compilation "
+                    "failed.",
+                )
+            )
 
+
+cmdclass = {"build_ext": custom_build_ext}
 
 kwargs = {}
 
-version = "5.1b1"
+version = "5.1b1-cython"
 
-with open('README.rst') as f:
-    kwargs['long_description'] = f.read()
+with open("README.rst") as f:
+    kwargs["long_description"] = f.read()
 
-if (platform.python_implementation() == 'CPython' and
-        os.environ.get('TORNADO_EXTENSION') != '0'):
+if (
+    platform.python_implementation() == "CPython"
+    and os.environ.get("TORNADO_EXTENSION") != "0"
+):
     # This extension builds and works on pypy as well, although pypy's jit
     # produces equivalent performance.
-    kwargs['ext_modules'] = [
-        Extension('tornado.speedups',
-                  sources=['tornado/speedups.c']),
-    ]
+    kwargs["ext_modules"] = [
+        Extension("tornado.speedups", sources=["tornado/speedups.c"])
+    ] + ext_modules
 
-    if os.environ.get('TORNADO_EXTENSION') != '1':
+    if os.environ.get("TORNADO_EXTENSION") != "1":
         # Unless the user has specified that the extension is mandatory,
         # fall back to the pure-python implementation on any build failure.
-        kwargs['cmdclass'] = {'build_ext': custom_build_ext}
-
+        kwargs["cmdclass"] = cmdclass
 
 if setuptools is not None:
     # If setuptools is not available, you're on your own for dependencies.
     install_requires = []
-    if sys.version_info < (3, 2):
-        install_requires.append('futures')
     if sys.version_info < (3, 4):
-        install_requires.append('singledispatch')
+        install_requires.append("singledispatch")
     if sys.version_info < (3, 5):
-        install_requires.append('backports_abc>=0.4')
-    kwargs['install_requires'] = install_requires
-
-    python_requires = '>= 2.7, !=3.0.*, !=3.1.*, !=3.2.*, != 3.3.*'
-    kwargs['python_requires'] = python_requires
+        install_requires.append("backports_abc>=0.4")
+    kwargs["install_requires"] = install_requires
 
 # Verify that the SSL module has all the modern upgrades. Check for several
 # names individually since they were introduced at different versions,
 # although they should all be present by Python 3.4 or 2.7.9.
-if (not hasattr(ssl, 'SSLContext') or
-        not hasattr(ssl, 'create_default_context') or
-        not hasattr(ssl, 'match_hostname')):
-    raise ImportError("Tornado requires an up-to-date SSL module. This means "
-                      "Python 2.7.9+ or 3.4+ (although some distributions have "
-                      "backported the necessary changes to older versions).")
+if (
+    not hasattr(ssl, "SSLContext")
+    or not hasattr(ssl, "create_default_context")
+    or not hasattr(ssl, "match_hostname")
+):
+    raise ImportError(
+        "Tornado requires an up-to-date SSL module. This means "
+        "Python 2.7.9+ or 3.4+ (although some distributions have "
+        "backported the necessary changes to older versions)."
+    )
 
 setup(
     name="tornado",
@@ -161,8 +203,6 @@ setup(
             "gettext_translations/fr_FR/LC_MESSAGES/tornado_test.mo",
             "gettext_translations/fr_FR/LC_MESSAGES/tornado_test.po",
             "options_test.cfg",
-            "options_test_types.cfg",
-            "options_test_types_str.cfg",
             "static/robots.txt",
             "static/sample.xml",
             "static/sample.xml.gz",
@@ -172,24 +212,24 @@ setup(
             "templates/utf8.html",
             "test.crt",
             "test.key",
-        ],
+        ]
     },
     author="Facebook",
     author_email="python-tornado@googlegroups.com",
     url="http://www.tornadoweb.org/",
     license="http://www.apache.org/licenses/LICENSE-2.0",
-    description=("Tornado is a Python web framework and asynchronous networking library,"
-                 " originally developed at FriendFeed."),
+    description="Tornado is a Python web framework and asynchronous networking"
+    " library, originally developed at FriendFeed.",
     classifiers=[
-        'License :: OSI Approved :: Apache Software License',
-        'Programming Language :: Python :: 2',
-        'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.4',
-        'Programming Language :: Python :: 3.5',
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: Implementation :: CPython',
-        'Programming Language :: Python :: Implementation :: PyPy',
+        "License :: OSI Approved :: Apache Software License",
+        "Programming Language :: Python :: 2",
+        "Programming Language :: Python :: 2.7",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.4",
+        "Programming Language :: Python :: 3.5",
+        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: Implementation :: CPython",
+        "Programming Language :: Python :: Implementation :: PyPy",
     ],
-    **kwargs
+    **kwargs,
 )
